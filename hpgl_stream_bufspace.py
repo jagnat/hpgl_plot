@@ -63,13 +63,27 @@ def log(msg):
         print('  [{:7.3f}] {}'.format(time.time() - _START, msg))
 
 
+def drain_input(ser):
+    """Discard any pending input by READING it.
+
+    We deliberately do NOT use reset_input_buffer() here: on some macOS FTDI
+    drivers its underlying tcflush() corrupts the OUTBOUND data path when called
+    between plot-data writes, so the plotter receives garbage and never draws
+    (confirmed with hpgl_diag.py: the interleaved query breaks streaming only
+    when it flushes the input buffer). A plain read clears stale bytes without
+    touching tcflush, so it is safe to interleave with data."""
+    n = ser.in_waiting
+    if n:
+        ser.read(n)
+
+
 def query_int(ser, cmd, timeout=1.0):
     """Send a device-control query (e.g. b'.B') and return its integer reply.
 
     The plotter answers these immediately - even mid-draw - with ASCII digits
     terminated by CR. A stray byte is tolerated: we extract the first integer we
     find. Returns None if nothing parseable comes back in `timeout` seconds."""
-    ser.reset_input_buffer()
+    drain_input(ser)
     ser.write(ESC + cmd)
     ser.flush()
     deadline = time.time() + timeout
@@ -150,15 +164,15 @@ def main():
         # Let the post-open DTR/RTS toggle settle, then put the plotter in the
         # programmed-on state and reset handshake params to defaults. We do NOT
         # configure ENQ/ACK mode - we rely solely on the ESC.B query, which works
-        # without any handshake setup.
+        # without any handshake setup. Note: we never call reset_input_buffer()/
+        # reset_output_buffer() - tcflush corrupts outbound data on some FTDI
+        # drivers (see drain_input). We drain by reading instead.
         time.sleep(0.5)
-        ser.reset_input_buffer()
-        ser.reset_output_buffer()
         ser.write(ESC + b'.(')      # programmed-on (harmless if already on)
         ser.write(ESC + b'.R')      # reset handshake parameters to defaults
         ser.flush()
         time.sleep(0.2)
-        ser.reset_input_buffer()
+        drain_input(ser)
 
         bufsz = query_int(ser, b'.L')
         if bufsz is None:
