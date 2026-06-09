@@ -43,7 +43,7 @@ from svg_to_gcode.geometry import LineSegmentChain, Line
 # ---------------------------------------------------------------------------
 
 # Input SVG. Override on the command line: python3 svg2hpgl.py path/to/file.svg
-path = 'output.svg'
+path = 'output_260608_174939.svg'
 
 # Pen to draw with (1-8 on an 8-pen carousel; the 7440A holds up to 8).
 pen = 6
@@ -125,6 +125,16 @@ def normalize_primitives(root, ns):
             y1 = float(node.get('y1')); y2 = float(node.get('y2'))
             style = node.get('style')
             d = 'M {} {} L {} {}'.format(x1, y1, x2, y2)
+            convert_to_path(node, ns, style, d)
+        elif node.tag == ns + 'rect':
+            x = float(node.get('x', 0)); y = float(node.get('y', 0))
+            w = float(node.get('width', 0)); h = float(node.get('height', 0))
+            if w <= 0 or h <= 0:
+                continue
+            style = node.get('style')
+            # Sharp-cornered rectangle as a closed path. (rx/ry rounding is
+            # ignored -- these SVGs use plain rects.)
+            d = 'M {0} {1} L {2} {1} L {2} {3} L {0} {3} Z'.format(x, y, x + w, y + h)
             convert_to_path(node, ns, style, d)
         elif node.tag == ns + 'circle':
             r = float(node.get('r'))
@@ -236,11 +246,16 @@ def emit_records(polylines, transform):
         for pt in pts[1:]:
             if pt != deduped[-1]:
                 deduped.append(pt)
-        if len(deduped) < 2:
-            continue
 
         x0, y0 = deduped[0]
         yield 'PU{},{};'.format(x0, y0)
+
+        if len(deduped) < 2:
+            # Degenerate polyline -- a single point at plotter resolution (the
+            # source is a zero-length "dot" line, or a tiny shape that rounded to
+            # one cell). Set the pen down on the spot so the dot isn't lost.
+            yield 'PD{},{};'.format(x0, y0)
+            continue
 
         # Pack the remaining points into one or more PD records. The pen stays
         # down across consecutive PD instructions, so a long polyline can be
